@@ -1,5 +1,7 @@
+use gtk::pango::TabArray;
 use gtk::{Image, Label, Notebook, Overlay, ScrolledWindow, TextBuffer, TextView};
 use gtk::prelude::*;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
@@ -13,7 +15,35 @@ use crate::file::{download_icon, get_language_from_extension, read_file_contents
 pub fn create_page(notebook: &Notebook, path: Option<PathBuf>) {
     let scrolled_window = ScrolledWindow::builder().hexpand(true).vexpand(true).build();
     let text_view = TextView::builder().editable(true).wrap_mode(gtk::WrapMode::Char).build();
+
+    text_view.set_left_margin(10);
+    text_view.set_bottom_margin(10);
+    text_view.set_right_margin(10);
+    text_view.set_top_margin(5);
+    text_view.set_tabs(&TabArray::new(4, true));
+
     let buffer = text_view.buffer();
+
+    let text_view_style = text_view.style_context();
+
+    text_view_style.add_class("textview");
+
+    let provider = gtk::CssProvider::new();
+
+    provider
+        .load_from_data(
+            "
+            .textview {
+                font-size: 16pt; 
+                letter-spacing: 0px;
+                line-height: 1;
+            }
+            ",
+        );
+
+    text_view_style.add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    setup_syntax_highlighting(&buffer);
 
     let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     let file_path_label = Label::new(Some(""));
@@ -75,6 +105,8 @@ pub fn create_page(notebook: &Notebook, path: Option<PathBuf>) {
     overlay.add_overlay(&file_path_label);
     file_path_label.set_halign(gtk::Align::End);
     file_path_label.set_valign(gtk::Align::End);
+    file_path_label.set_margin_bottom(5);
+    file_path_label.set_margin_end(5);
 
     hbox.append(&overlay);
 
@@ -152,4 +184,67 @@ pub fn get_page_file_path(notebook: &Notebook) -> Option<PathBuf> {
     }
 }
 
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{ThemeSet, Style};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
+
+static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(|| SyntaxSet::load_defaults_newlines());
+static THEME_SET: Lazy<ThemeSet> = Lazy::new(|| ThemeSet::load_defaults());
+
+pub fn setup_syntax_highlighting(buffer: &gtk::TextBuffer) {
+
+    println!("Setting up syntax highlighting");
+
+    let theme = &THEME_SET.themes["base16-ocean.dark"];
+    let syntax = SYNTAX_SET.find_syntax_by_extension("rs")
+        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+    
+    let highlighter = RefCell::new(HighlightLines::new(syntax, theme));
+
+    // Connect to the buffer's changed signal
+    buffer.connect_changed(move |buffer| {
+        let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false)
+            .to_string();
+        
+        buffer.remove_all_tags(&buffer.start_iter(), &buffer.end_iter());
+        
+        let mut offset = 0;
+        for line in LinesWithEndings::from(&text) {
+            let ranges = highlighter.borrow_mut()
+                .highlight_line(line, &SYNTAX_SET)
+                .unwrap_or_default();
+            
+            for (style, text) in ranges {
+                apply_style(buffer, style, offset, text.len());
+                offset += text.len();
+            }
+        }
+    });
+}
+
+fn apply_style(buffer: &gtk::TextBuffer, style: Style, offset: usize, length: usize) {
+    let start_iter = buffer.iter_at_offset(offset as i32);
+    let end_iter = buffer.iter_at_offset((offset + length) as i32);
+    
+    // Create or reuse tag for this style
+    let tag_name = format!("style_{:x}_{:x}_{:x}", style.foreground.r, style.foreground.g, style.foreground.b);
+    let tag = if let Some(tag) = buffer.tag_table().lookup(&tag_name) {
+        tag
+    } else {
+        let tag = gtk::TextTag::new(Some(&tag_name));
+        tag.set_property("foreground", &format!("#{:02x}{:02x}{:02x}", 
+            style.foreground.r, style.foreground.g, style.foreground.b));
+        if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+            tag.set_property("weight", 700i32);
+        }
+        if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
+            tag.set_property("style", gtk::pango::Style::Italic);
+        }
+        buffer.tag_table().add(&tag);
+        tag
+    };
+    
+    buffer.apply_tag(&tag, &start_iter, &end_iter);
+}
 

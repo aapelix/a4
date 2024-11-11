@@ -1,22 +1,29 @@
 extern crate gtk4 as gtk;
 use file::{open_file_dialog, save_file};
 use gtk::glib::Propagation;
-use gtk::{prelude::*, EventControllerKey, Label, ListBox, ListBoxRow, Notebook, Paned};
+use gtk::{prelude::*, EventControllerKey, Notebook, Paned};
 use gtk::{Application, ApplicationWindow};
 use page::{create_page, get_page_buffer, get_page_file_path};
+use std::collections::HashMap;
 use std::env;
-use std::path::Path;
-use std::path::PathBuf;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::path::{Path, PathBuf};
 
 mod file;
 mod page;
+
+#[derive(Debug, Clone)]
+enum Column {
+    Filename = 0,
+    Path = 1,
+    IsDir = 2,
+}
 
 fn create_ui(app: &Application) {
     let window = ApplicationWindow::new(app);
     window.set_title(Some("a4"));
     window.set_default_size(800, 600);
+
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
     let hbox = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -27,6 +34,22 @@ fn create_ui(app: &Application) {
         .margin_bottom(6)
         .build();
 
+    let command_palette_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let command_palette= gtk::Entry::builder().placeholder_text("Type a command...").hexpand(true).width_request(600).build();
+
+    command_palette_box.set_halign(gtk::Align::Center);
+    command_palette_box.append(&command_palette);
+
+    command_palette_box.set_margin_top(5);
+
+    let mut command_map: HashMap<String, Box<dyn Fn()>> = HashMap::new();
+
+    fn add_command(command_map: &mut HashMap<String, Box<dyn Fn()>>, name: &str, action: Box<dyn Fn()>) {
+        command_map.insert(name.to_string(), action);
+    }
+
+    vbox.append(&command_palette_box);
+
     let paned = Paned::new(gtk::Orientation::Horizontal);
 
     let notebook = Notebook::new();
@@ -34,12 +57,54 @@ fn create_ui(app: &Application) {
 
     let side_bar = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    let list_box = ListBox::new();
-    let open_folder_button = gtk::Button::with_label("Open Folder");
+    let side_bar_label = gtk::Label::new(Some("Explorer"));
 
-    let list_box_clone = list_box.clone();
+    side_bar_label.set_margin_top(5);
+    side_bar_label.set_margin_bottom(5);
 
-    open_folder_button.connect_clicked(move |_| {
+    side_bar.append(&side_bar_label);
+
+    let store = gtk::TreeStore::new(&[
+        String::static_type(),    // Filename
+        String::static_type(),    // Path
+        bool::static_type(),      // IsDir
+    ]);
+
+    let tree_view = gtk::TreeView::with_model(&store);
+    tree_view.set_headers_visible(false);
+
+    let filename_column = gtk::TreeViewColumn::new();
+    let cell_icon = gtk::CellRendererPixbuf::new();
+    let cell_text = gtk::CellRendererText::new();
+    
+    filename_column.pack_start(&cell_icon, false);
+    filename_column.pack_start(&cell_text, true);
+    
+    filename_column.set_cell_data_func(&cell_icon, |_column, cell, model, iter| {
+        let cell = cell.downcast_ref::<gtk::CellRendererPixbuf>().unwrap();
+        let is_dir = model.get::<bool>(iter, Column::IsDir as i32);
+
+        cell.set_property(
+            "icon-name",
+            if is_dir { "folder-symbolic" } else { "text-x-generic-symbolic" },
+        );
+    });
+
+    filename_column.set_cell_data_func(&cell_text, |_column, cell, model, iter| {
+        let cell = cell.downcast_ref::<gtk::CellRendererText>().unwrap();
+        let filename = model.get::<String>(iter, Column::Filename as i32);
+        cell.set_property("text", &filename);
+    });
+
+    tree_view.append_column(&filename_column);
+
+    let scrolled_window = gtk::ScrolledWindow::new();
+    scrolled_window.set_vexpand(true);
+    scrolled_window.set_child(Some(&tree_view));
+
+    let store_clone = store.clone();
+    
+    add_command(&mut command_map, "open folder", Box::new(move || {
         let folder_chooser = gtk::FileChooserDialog::builder()
             .title("Open folder")
             .action(gtk::FileChooserAction::SelectFolder)
@@ -48,57 +113,71 @@ fn create_ui(app: &Application) {
         folder_chooser.add_button("Cancel", gtk::ResponseType::Cancel);
         folder_chooser.add_button("Open", gtk::ResponseType::Accept);
 
-        let list_box = list_box_clone.clone();
+        let store = store_clone.clone();
 
         folder_chooser.connect_response(move |dialog, response| {
             if response == gtk::ResponseType::Accept {
                 if let Some(file_path) = dialog.file().and_then(|file| file.path()) {
-                    println!("{:?}", file_path);
-                    
-                    if file_path.is_dir() {
-                        load_folder_contents(&list_box, &file_path);
-                    }
+                    store.clear();
+                    load_folder_contents(&store, None, &file_path);
                 }
             }
-        
             dialog.close();
         });
 
         folder_chooser.show();
-    });
+    }));
 
-    let open_button = gtk::Button::with_label("Open file");
     let notebook_clone = notebook.clone();
-    open_button.connect_clicked(move |_| {
+
+    add_command(&mut command_map, "open file", Box::new(move || {
         open_file_dialog(&notebook_clone);
+    }));
+
+    let notebook_clone = notebook.clone();
+    tree_view.connect_row_activated(move |tree_view, path, _column| {
+        let model = tree_view.model().unwrap();
+        let iter = model.iter(path).unwrap();
+        
+        let is_dir = model.get::<bool>(&iter, Column::IsDir as i32);
+        let file_path = model.get::<String>(&iter, Column::Path as i32);
+        
+        if !is_dir {
+            let path = PathBuf::from(file_path);
+            create_page(&notebook_clone, Some(path));
+        }
     });
 
     create_page(&notebook, None);
 
-    side_bar.append(&open_button);
-    side_bar.append(&open_folder_button);
-    side_bar.append(&list_box);
+    side_bar.append(&scrolled_window);
 
     paned.set_start_child(Some(&side_bar));
     paned.set_end_child(Some(&notebook));
 
     hbox.append(&paned);
+    vbox.append(&hbox);
 
-    window.set_child(Some(&hbox));
+    command_palette.connect_activate(move |entry| {
+        let text = entry.text().to_string().to_lowercase();
+
+        if let Some(action) = command_map.get(&text) {
+            action();
+            entry.set_text("");
+        } else {
+            println!("Command not found: {}", text);
+        }
+    });
+
+    window.set_child(Some(&vbox));
 
     let key_controller = EventControllerKey::new();
     let notebook_clone = notebook.clone();
     key_controller.connect_key_pressed(move |_, key, _, modifier| {
-        println!("Key pressed: {:?}, {:?}", key.name(), modifier);
         if let Some(key) = key.name() {
             if key == "s" && modifier == gtk::gdk::ModifierType::CONTROL_MASK {
-                println!("Save file");
-                println!("{:?}", get_page_file_path(&notebook_clone));
-                let buffer = get_page_buffer(&notebook_clone);
-                if let Some(buffer) = buffer {
-                    println!("{:?}", buffer.text(&buffer.start_iter(), &buffer.end_iter(), true));
+                if let Some(buffer) = get_page_buffer(&notebook_clone) {
                     if let Some(path) = get_page_file_path(&notebook_clone) {
-                        println!("{:?}", path);
                         save_file(&buffer, &path);
                     }
                 }
@@ -111,164 +190,41 @@ fn create_ui(app: &Application) {
     window.show();
 }
 
-fn load_folder_contents(list_box: &ListBox, path: &Path) {
+fn load_folder_contents(store: &gtk::TreeStore, parent: Option<&gtk::TreeIter>, path: &Path) {
+    if let Ok(entries) = path.read_dir() {
+        let mut entries: Vec<_> = entries
+            .filter_map(Result::ok)
+            .collect();
 
-    let entries: Vec<PathBuf> = path
-        .read_dir()
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .collect();
+        entries.sort_by(|a, b| {
+            let a_is_dir = a.path().is_dir();
+            let b_is_dir = b.path().is_dir();
+            
+            if a_is_dir && !b_is_dir {
+                std::cmp::Ordering::Less
+            } else if !a_is_dir && b_is_dir {
+                std::cmp::Ordering::Greater
+            } else {
+                a.file_name().cmp(&b.file_name())
+            }
+        });
 
-    // Sort entries to group folders and files
-    let mut sorted_entries = entries.clone();
-    sorted_entries.sort_by(|a, b| {
-        let a_is_dir = a.is_dir();
-        let b_is_dir = b.is_dir();
-        
-        if a_is_dir && !b_is_dir {
-            std::cmp::Ordering::Less
-        } else if !a_is_dir && b_is_dir {
-            std::cmp::Ordering::Greater
-        } else {
-            a.file_name().cmp(&b.file_name())
-        }
-    });
+        for entry in entries {
+            let path = entry.path();
+            let is_dir = path.is_dir();
+            let filename = entry.file_name().to_string_lossy().to_string();
+            let path_str = path.to_string_lossy().to_string();
 
-    for entry_path in sorted_entries {
-        let entry_name = entry_path.file_name().unwrap_or_default();
-        let entry_name_str = entry_name.to_string_lossy();
+            let iter = store.append(parent);
+            store.set(&iter, &[
+                (Column::Filename as u32, &filename),
+                (Column::Path as u32, &path_str),
+                (Column::IsDir as u32, &is_dir),
+            ]);
 
-        let row = ListBoxRow::new();
-        row.set_margin_top(if list_box.first_child().is_none() { 10 } else { 0 });
-
-        let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 5);
-        hbox.set_halign(gtk::Align::Start);
-
-        let label = Label::new(Some(&entry_name_str));
-        label.set_halign(gtk::Align::Start);
-        label.set_margin_start(10);
-
-        // Create an expander for directories
-        let expander = if entry_path.is_dir() {
-            let exp = gtk::Image::from_icon_name("pan-end-symbolic");
-            exp.set_margin_end(5);
-            Some(exp)
-        } else {
-            None
-        };
-
-        // Add an icon for folders/files
-        let icon = if entry_path.is_dir() {
-            gtk::Image::from_icon_name("folder-symbolic")
-        } else {
-            gtk::Image::from_icon_name("text-x-generic-symbolic")
-        };
-        icon.set_margin_end(5);
-
-        // State to track expansion
-        let is_expanded = Rc::new(RefCell::new(false));
-
-        if let Some(exp) = expander.clone() {
-            hbox.append(&exp);
-        }
-        hbox.append(&icon);
-        hbox.append(&label);
-
-        row.set_child(Some(&hbox));
-        list_box.append(&row);
-        
-        if entry_path.is_dir() {
-            row.set_activatable(true);
-            let row_clone = row.clone();
-            let list_box_clone = list_box.clone();
-            let entry_path_clone = entry_path.clone();
-            let is_expanded_clone = is_expanded.clone();
-            let expander_clone = expander.clone();
-            row.connect_activate(move |_| {
-
-                let mut expanded = is_expanded_clone.borrow_mut();
-                
-                // Toggle expansion state
-                *expanded = !*expanded;
-
-                // Rotate expander icon
-                if let Some(exp) = &expander_clone {
-                    exp.set_icon_name(if *expanded {
-                        Some("pan-down-symbolic")
-                    } else {
-                        Some("pan-end-symbolic")
-                    });
-                }
-
-                // Find the position of the current row
-                let mut position = 0;
-                let mut current_child = list_box_clone.first_child();
-                while let Some(child) = current_child {
-                    if child == row_clone {
-                        break;
-                    }
-                    position += 1;
-                    current_child = child.next_sibling();
-                }
-
-                // If expanding, add subdirectories
-                if *expanded {
-                    if let Ok(entries) = entry_path_clone.read_dir() {
-                        for sub_entry in entries.filter_map(Result::ok) {
-                            let sub_path = sub_entry.path();
-                            let sub_name = sub_path.file_name().unwrap_or_default();
-                            let sub_name_str = sub_name.to_string_lossy();
-
-                            let sub_row = ListBoxRow::new();
-                            
-                            let sub_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 5);
-                            sub_hbox.set_halign(gtk::Align::Start);
-
-                            let sub_label = Label::new(Some(&format!("  {}", sub_name_str)));
-                            sub_label.set_halign(gtk::Align::Start);
-                            sub_label.set_margin_start(20);
-
-                            // Subdirectory expander
-                            let sub_expander = if sub_path.is_dir() {
-                                let exp = gtk::Image::from_icon_name("pan-end-symbolic");
-                                exp.set_margin_end(5);
-                                Some(exp)
-                            } else {
-                                None
-                            };
-
-                            let sub_icon = if sub_path.is_dir() {
-                                gtk::Image::from_icon_name("folder-symbolic")
-                            } else {
-                                gtk::Image::from_icon_name("text-x-generic-symbolic")
-                            };
-                            sub_icon.set_margin_end(5);
-
-                            if let Some(exp) = sub_expander {
-                                sub_hbox.append(&exp);
-                            }
-                            sub_hbox.append(&sub_icon);
-                            sub_hbox.append(&sub_label);
-                            sub_row.set_child(Some(&sub_hbox));
-
-                            // Insert the new row after the parent row
-                            list_box_clone.insert(&sub_row, position + 1);
-                            position += 1;
-                        }
-                    }
-                } else {
-                    // Collapse: remove all rows after the current row until a row at the same or higher level
-                    let mut next_child = row_clone.next_sibling();
-                    while let Some(child) = next_child {
-                        let next = child.next_sibling();
-                        if let Some(row) = child.downcast_ref::<ListBoxRow>() {
-                            list_box_clone.remove(row);
-                        }
-                        next_child = next;
-                    }
-                }
-            });
+            if is_dir {
+                load_folder_contents(store, Some(&iter), &path);
+            }
         }
     }
 }

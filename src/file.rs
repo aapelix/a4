@@ -17,7 +17,7 @@ pub fn new_file(buffer: &TextBuffer, window: &ApplicationWindow) {}
 pub fn save_as_file(buffer: &TextBuffer, window: &ApplicationWindow) {}
 
 pub fn read_file_contents(path: &PathBuf) -> Option<(String, String)> {
-    match fs::read_to_string(&path) {
+	match fs::read_to_string(&path) {
         Ok(contents) => {
             let filename = path.file_name()
                 .and_then(|name| name.to_str())
