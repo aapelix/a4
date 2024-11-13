@@ -1,9 +1,9 @@
 extern crate gtk4 as gtk;
-use file::{open_file_dialog, save_file};
+use file::open_file_dialog;
 use gtk::glib::Propagation;
 use gtk::{prelude::*, EventControllerKey, Notebook, Paned};
 use gtk::{Application, ApplicationWindow};
-use page::{create_page, get_page_buffer, get_page_file_path};
+use page::create_page;
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -57,12 +57,15 @@ fn create_ui(app: &Application) {
 
     let side_bar = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    let side_bar_label = gtk::Label::new(Some("Explorer"));
+    let view_selector = gtk::ComboBoxText::new();
+    view_selector.append_text("Explorer");
+    view_selector.append_text("Extensions");
+    view_selector.set_active(Some(0));
+    side_bar.append(&view_selector);
 
-    side_bar_label.set_margin_top(5);
-    side_bar_label.set_margin_bottom(5);
-
-    side_bar.append(&side_bar_label);
+    let view_stack = gtk::Stack::new();
+    view_stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
+    side_bar.append(&view_stack);
 
     let store = gtk::TreeStore::new(&[
         String::static_type(),    // Filename
@@ -144,16 +147,30 @@ fn create_ui(app: &Application) {
         
         if !is_dir {
             let path = PathBuf::from(file_path);
-            create_page(&notebook_clone, Some(path));
+            let path = path.into_os_string().into_string().unwrap();
+            println!("{}", path);
+            create_page(&notebook_clone, &path);
         }
     });
 
-    create_page(&notebook, None);
+    create_page(&notebook, "./src/file.rs");
 
-    side_bar.append(&scrolled_window);
+    view_stack.add_named(&scrolled_window, Some("Explorer"));
+
+    // Create and add a placeholder for the Extensions view
+    let extensions_view = gtk::Label::new(Some("Extensions view coming soon..."));
+    view_stack.add_named(&extensions_view, Some("Extensions"));
+
+    view_selector.connect_changed(move |combo| {
+        if let Some(active_text) = combo.active_text() {
+            view_stack.set_visible_child_name(active_text.as_str());
+        }
+    });
 
     paned.set_start_child(Some(&side_bar));
     paned.set_end_child(Some(&notebook));
+
+    paned.set_position(200);
 
     hbox.append(&paned);
     vbox.append(&hbox);
@@ -176,11 +193,7 @@ fn create_ui(app: &Application) {
     key_controller.connect_key_pressed(move |_, key, _, modifier| {
         if let Some(key) = key.name() {
             if key == "s" && modifier == gtk::gdk::ModifierType::CONTROL_MASK {
-                if let Some(buffer) = get_page_buffer(&notebook_clone) {
-                    if let Some(path) = get_page_file_path(&notebook_clone) {
-                        save_file(&buffer, &path);
-                    }
-                }
+                println!("Save file")
             }
         }
         Propagation::Stop
