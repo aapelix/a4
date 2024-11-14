@@ -1,6 +1,5 @@
 extern crate gtk4 as gtk;
 use file::open_file_dialog;
-use gtk::glib::Propagation;
 use gtk::{prelude::*, EventControllerKey, Notebook, Paned};
 use gtk::{Application, ApplicationWindow};
 use page::create_page;
@@ -131,6 +130,8 @@ fn create_ui(app: &Application) {
         folder_chooser.show();
     }));
 
+    let key_controller = EventControllerKey::new();
+
     let notebook_clone = notebook.clone();
 
     add_command(&mut command_map, "open file", Box::new(move || {
@@ -188,16 +189,7 @@ fn create_ui(app: &Application) {
 
     window.set_child(Some(&vbox));
 
-    let key_controller = EventControllerKey::new();
-    let notebook_clone = notebook.clone();
-    key_controller.connect_key_pressed(move |_, key, _, modifier| {
-        if let Some(key) = key.name() {
-            if key == "s" && modifier == gtk::gdk::ModifierType::CONTROL_MASK {
-                println!("Save file")
-            }
-        }
-        Propagation::Stop
-    });
+    
 
     window.add_controller(key_controller);
     window.show();

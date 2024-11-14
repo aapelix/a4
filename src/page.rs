@@ -1,4 +1,5 @@
-use gtk::{Image, Label, Notebook, gio, glib};
+use gtk::glib::Propagation;
+use gtk::{gio, glib, EventControllerKey, Image, Label, Notebook};
 use gtk::prelude::*;
 use sourceview5::prelude::BufferExt;
 use std::convert::TryInto;
@@ -22,8 +23,8 @@ pub fn create_page(notebook: &Notebook, path: &str) {
         buffer.set_style_scheme(Some(scheme));
     }
 
-    let file = gio::File::for_path(path);
-    let file = sourceview5::File::builder().location(&file).build();
+    let file_path = gio::File::for_path(path);
+    let file = sourceview5::File::builder().location(&file_path).build();
     let loader = sourceview5::FileLoader::new(&buffer, &file);
 
     loader.load_async_with_callback(
@@ -57,6 +58,23 @@ pub fn create_page(notebook: &Notebook, path: &str) {
     let map = sourceview5::Map::new();
     map.set_view(&view);
     container.append(&map);
+
+    let key_controller = EventControllerKey::new();
+    key_controller.connect_key_pressed(move |_, key, _, modifier| {
+        if let Some(key) = key.name() {
+            if key == "s" && modifier == gtk::gdk::ModifierType::CONTROL_MASK {
+                
+                let file_saver = sourceview5::FileSaver::new(&buffer, &file);
+
+                file_saver.save_async(glib::Priority::DEFAULT, gio::Cancellable::NONE, |res| {
+                    println!("saved, {:?}", res)
+                });
+            }
+        }
+        Propagation::Proceed
+    });
+
+    view.add_controller(key_controller);
 
     let label_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
