@@ -1,0 +1,1 @@
+Try typing ´open file´ or ´open folder´ on to the command box above

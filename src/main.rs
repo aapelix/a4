@@ -154,7 +154,7 @@ fn create_ui(app: &Application) {
         }
     });
 
-    create_page(&notebook, "./src/file.rs");
+    create_page(&notebook, "./welcome.md");
 
     view_stack.add_named(&scrolled_window, Some("Explorer"));
 
